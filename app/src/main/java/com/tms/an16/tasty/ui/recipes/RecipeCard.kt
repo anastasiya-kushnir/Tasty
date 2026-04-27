@@ -1,6 +1,7 @@
 package com.tms.an16.tasty.ui.recipes
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
@@ -36,16 +37,21 @@ import com.tms.an16.tasty.ui.theme.Red
 import com.tms.an16.tasty.ui.theme.Yellow
 import com.tms.an16.tasty.util.parseHtml
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun RecipeCard(
     recipe: RecipeEntity,
     onRecipeClick: (RecipeEntity) -> Unit,
+    onRecipeLongClick: ((RecipeEntity) -> Unit)? = null,
 ) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp)
-            .clickable { onRecipeClick(recipe) },
+            .combinedClickable(
+                onClick = { onRecipeClick(recipe) },
+                onLongClick = onRecipeLongClick?.let { { it(recipe) } },
+            ),
         shape = RoundedCornerShape(10.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
         colors = CardDefaults.cardColors(
@@ -124,7 +130,7 @@ fun RecipeCard(
 }
 
 @Composable
-fun RecipeStatusItem(
+private fun RecipeStatusItem(
     iconRes: Int,
     text: String,
     tint: Color,
