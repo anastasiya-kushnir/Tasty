@@ -1,9 +1,6 @@
 package com.tms.an16.tasty.ui.recipes
 
-import androidx.lifecycle.LiveData
-import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.asLiveData
 import androidx.lifecycle.viewModelScope
 import com.tms.an16.tasty.R
 import com.tms.an16.tasty.controller.NetworkController
@@ -22,7 +19,12 @@ import com.tms.an16.tasty.util.toRecipeEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import retrofit2.Response
 import javax.inject.Inject
@@ -31,53 +33,62 @@ import javax.inject.Inject
 class RecipesViewModel @Inject constructor(
     private val repository: Repository,
     private val dataStoreRepository: DataStoreRepository,
-    networkController: NetworkController
+    networkController: NetworkController,
 ) : ViewModel() {
 
-    var recipesResponse = MutableLiveData<NetworkResult<FoodRecipes>>()
+    private val _recipesResponse =
+        MutableStateFlow<NetworkResult<FoodRecipes>>(NetworkResult.Idle())
+    val recipesResponse: StateFlow<NetworkResult<FoodRecipes>> = _recipesResponse.asStateFlow()
 
-    val readRecipes: LiveData<List<RecipeEntity>> = repository.local.readRecipes().asLiveData()
+    val readRecipes: StateFlow<List<RecipeEntity>> = repository.local.readRecipes()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val isNetworkConnected = MutableLiveData<NetworkState>()
+    private val _isNetworkConnected = MutableStateFlow(NetworkState.UNKNOWN)
+    val isNetworkConnected: StateFlow<NetworkState> = _isNetworkConnected.asStateFlow()
 
-    val readMealAndDietType = dataStoreRepository.readMealAndDietType
+    val mealAndDietType: StateFlow<MealAndDietType> = dataStoreRepository.readMealAndDietType
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            MealAndDietType(DEFAULT_MEAL_TYPE, 0, DEFAULT_DIET_TYPE, 0),
+        )
 
     var backOnline = false
 
     val readBackOnline: Flow<Boolean> = dataStoreRepository.readBackOnline
 
-    var searchedRecipesResponse: MutableLiveData<NetworkResult<FoodRecipes>> = MutableLiveData()
-
-    private lateinit var mealAndDiet: MealAndDietType
+    private val _searchedRecipesResponse =
+        MutableStateFlow<NetworkResult<FoodRecipes>>(NetworkResult.Idle())
+    val searchedRecipesResponse: StateFlow<NetworkResult<FoodRecipes>> =
+        _searchedRecipesResponse.asStateFlow()
 
     init {
         viewModelScope.launch {
             networkController.isNetworkConnected.collectLatest {
-                isNetworkConnected.value = it
+                _isNetworkConnected.value = it
             }
         }
     }
 
     fun getRecipes(queries: Map<String, String>) {
         viewModelScope.launch {
-            recipesResponse.value = NetworkResult.Loading()
-            if (isNetworkConnected.value == NetworkState.CONNECTED) {
+            _recipesResponse.value = NetworkResult.Loading()
+            if (_isNetworkConnected.value == NetworkState.CONNECTED) {
                 try {
                     val response = repository.remote.getRecipes(queries)
-                    recipesResponse.value = handleFoodRecipesResponse(response)
+                    _recipesResponse.value = handleFoodRecipesResponse(response)
 
-                    val foodRecipe = recipesResponse.value?.data
+                    val foodRecipe = _recipesResponse.value.data
                     if (foodRecipe != null) {
                         offlineCacheRecipes(foodRecipe)
                     }
-
                 } catch (e: Exception) {
-                    recipesResponse.value =
+                    _recipesResponse.value =
                         NetworkResult.Error(messageId = R.string.recipes_not_found)
 
                 }
             } else {
-                recipesResponse.value =
+                _recipesResponse.value =
                     NetworkResult.Error(messageId = R.string.no_internet_connection)
             }
         }
@@ -85,58 +96,43 @@ class RecipesViewModel @Inject constructor(
 
     fun searchRecipes(searchQuery: Map<String, String>) {
         viewModelScope.launch {
-            searchedRecipesResponse.value = NetworkResult.Loading()
-            if (isNetworkConnected.value == NetworkState.CONNECTED) {
+            _searchedRecipesResponse.value = NetworkResult.Loading()
+            if (_isNetworkConnected.value == NetworkState.CONNECTED) {
                 try {
                     val response = repository.remote.searchRecipes(searchQuery)
-                    searchedRecipesResponse.value = handleFoodRecipesResponse(response)
+                    _searchedRecipesResponse.value = handleFoodRecipesResponse(response)
                 } catch (e: Exception) {
-                    searchedRecipesResponse.value =
+                    _searchedRecipesResponse.value =
                         NetworkResult.Error(messageId = R.string.recipes_not_found)
                 }
             } else {
-                searchedRecipesResponse.value =
+                _searchedRecipesResponse.value =
                     NetworkResult.Error(messageId = R.string.no_internet_connection)
             }
         }
     }
 
-    fun saveMealAndDietType() =
-        viewModelScope.launch(Dispatchers.IO) {
-            if (this@RecipesViewModel::mealAndDiet.isInitialized) {
-                dataStoreRepository.saveMealAndDietType(
-                    mealAndDiet.selectedMealType,
-                    mealAndDiet.selectedMealTypeId,
-                    mealAndDiet.selectedDietType,
-                    mealAndDiet.selectedDietTypeId
-                )
-            }
-        }
-
-    fun saveMealAndDietTypeTemp(
+    fun saveMealAndDietType(
         mealType: String,
         mealTypeId: Int,
         dietType: String,
-        dietTypeId: Int
-    ) {
-        mealAndDiet = MealAndDietType(
+        dietTypeId: Int,
+    ) = viewModelScope.launch(Dispatchers.IO) {
+        dataStoreRepository.saveMealAndDietType(
             mealType,
             mealTypeId,
             dietType,
-            dietTypeId
+            dietTypeId,
         )
     }
 
     fun applyQueries(): HashMap<String, String> {
         val queries: HashMap<String, String> = dataStoreRepository.applyQueries()
+        val currentMealAndDiet = mealAndDietType.value
 
-        if (this@RecipesViewModel::mealAndDiet.isInitialized) {
-            queries[QUERY_TYPE] = mealAndDiet.selectedMealType
-            queries[QUERY_DIET] = mealAndDiet.selectedDietType
-        } else {
-            queries[QUERY_TYPE] = DEFAULT_MEAL_TYPE
-            queries[QUERY_DIET] = DEFAULT_DIET_TYPE
-        }
+        queries[QUERY_TYPE] = currentMealAndDiet.selectedMealType
+        queries[QUERY_DIET] = currentMealAndDiet.selectedDietType
+
         return queries
     }
 
