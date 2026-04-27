@@ -46,7 +46,12 @@ class RecipesViewModel @Inject constructor(
     private val _isNetworkConnected = MutableStateFlow(NetworkState.UNKNOWN)
     val isNetworkConnected: StateFlow<NetworkState> = _isNetworkConnected.asStateFlow()
 
-    val readMealAndDietType = dataStoreRepository.readMealAndDietType
+    val mealAndDietType: StateFlow<MealAndDietType> = dataStoreRepository.readMealAndDietType
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            MealAndDietType(DEFAULT_MEAL_TYPE, 0, DEFAULT_DIET_TYPE, 0),
+        )
 
     var backOnline = false
 
@@ -56,8 +61,6 @@ class RecipesViewModel @Inject constructor(
         MutableStateFlow<NetworkResult<FoodRecipes>>(NetworkResult.Idle())
     val searchedRecipesResponse: StateFlow<NetworkResult<FoodRecipes>> =
         _searchedRecipesResponse.asStateFlow()
-
-    private lateinit var mealAndDiet: MealAndDietType
 
     init {
         viewModelScope.launch {
@@ -79,7 +82,6 @@ class RecipesViewModel @Inject constructor(
                     if (foodRecipe != null) {
                         offlineCacheRecipes(foodRecipe)
                     }
-
                 } catch (e: Exception) {
                     _recipesResponse.value =
                         NetworkResult.Error(messageId = R.string.recipes_not_found)
@@ -110,25 +112,13 @@ class RecipesViewModel @Inject constructor(
         }
     }
 
-    fun saveMealAndDietType() =
-        viewModelScope.launch(Dispatchers.IO) {
-            if (this@RecipesViewModel::mealAndDiet.isInitialized) {
-                dataStoreRepository.saveMealAndDietType(
-                    mealAndDiet.selectedMealType,
-                    mealAndDiet.selectedMealTypeId,
-                    mealAndDiet.selectedDietType,
-                    mealAndDiet.selectedDietTypeId,
-                )
-            }
-        }
-
-    fun saveMealAndDietTypeTemp(
+    fun saveMealAndDietType(
         mealType: String,
         mealTypeId: Int,
         dietType: String,
         dietTypeId: Int,
-    ) {
-        mealAndDiet = MealAndDietType(
+    ) = viewModelScope.launch(Dispatchers.IO) {
+        dataStoreRepository.saveMealAndDietType(
             mealType,
             mealTypeId,
             dietType,
@@ -138,14 +128,11 @@ class RecipesViewModel @Inject constructor(
 
     fun applyQueries(): HashMap<String, String> {
         val queries: HashMap<String, String> = dataStoreRepository.applyQueries()
+        val currentMealAndDiet = mealAndDietType.value
 
-        if (this@RecipesViewModel::mealAndDiet.isInitialized) {
-            queries[QUERY_TYPE] = mealAndDiet.selectedMealType
-            queries[QUERY_DIET] = mealAndDiet.selectedDietType
-        } else {
-            queries[QUERY_TYPE] = DEFAULT_MEAL_TYPE
-            queries[QUERY_DIET] = DEFAULT_DIET_TYPE
-        }
+        queries[QUERY_TYPE] = currentMealAndDiet.selectedMealType
+        queries[QUERY_DIET] = currentMealAndDiet.selectedDietType
+
         return queries
     }
 

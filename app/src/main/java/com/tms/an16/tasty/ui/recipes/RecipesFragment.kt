@@ -102,11 +102,11 @@ class RecipesFragment : Fragment(), SearchView.OnQueryTextListener {
         viewLifecycleOwner.lifecycleScope.launch {
             viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
                 val database = viewModel.readRecipes.value
-                if (database.isEmpty() && !dataRequested && viewModel.isNetworkConnected.value == NetworkState.CONNECTED) {
+                if (args.backFromBottomSheet) {
+                    viewModel.getRecipes(viewModel.applyQueries())
+                } else if (database.isEmpty() && !dataRequested && viewModel.isNetworkConnected.value == NetworkState.CONNECTED) {
                     viewModel.getRecipes(viewModel.applyQueries())
                     dataRequested = true
-                } else if (args.backFromBottomSheet) {
-                    viewModel.getRecipes(viewModel.applyQueries())
                 }
             }
         }
