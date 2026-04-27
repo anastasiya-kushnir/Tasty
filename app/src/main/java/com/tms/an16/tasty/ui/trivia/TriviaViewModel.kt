@@ -12,10 +12,10 @@ import com.tms.an16.tasty.repository.Repository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import retrofit2.Response
 import javax.inject.Inject
@@ -23,15 +23,15 @@ import javax.inject.Inject
 @HiltViewModel
 class TriviaViewModel @Inject constructor(
     private val repository: Repository,
-    networkController: NetworkController
+    networkController: NetworkController,
 ) : ViewModel() {
 
-    private val _triviaResponse = MutableStateFlow<NetworkResult<Trivia>>(NetworkResult.Loading())
+    private val _triviaResponse = MutableStateFlow<NetworkResult<Trivia>>(NetworkResult.Idle())
     val triviaResponse: StateFlow<NetworkResult<Trivia>> = _triviaResponse.asStateFlow()
 
     val readTrivia: Flow<List<TriviaEntity>> = repository.local.readTrivia()
 
-    private val isNetworkConnected = MutableStateFlow(NetworkState.DISCONNECTED)
+    private val isNetworkConnected = MutableStateFlow(NetworkState.UNKNOWN)
 
     init {
         viewModelScope.launch {

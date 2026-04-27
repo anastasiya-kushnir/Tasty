@@ -9,24 +9,20 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Toast
 import androidx.appcompat.widget.SearchView
+import androidx.compose.ui.platform.ComposeView
 import androidx.core.view.MenuHost
 import androidx.core.view.MenuProvider
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import androidx.navigation.findNavController
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.fragment.findNavController
 import androidx.navigation.fragment.navArgs
-import androidx.recyclerview.widget.LinearLayoutManager
 import com.tms.an16.tasty.R
 import com.tms.an16.tasty.controller.NetworkState
 import com.tms.an16.tasty.controller.SelectedRecipeController
-import com.tms.an16.tasty.database.entity.RecipeEntity
-import com.tms.an16.tasty.databinding.FragmentRecipesBinding
-import com.tms.an16.tasty.network.NetworkResult
-import com.tms.an16.tasty.ui.recipes.adapter.RecipesAdapter
-import com.tms.an16.tasty.util.toRecipeEntity
+import com.tms.an16.tasty.ui.theme.TastyTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -34,23 +30,43 @@ import kotlinx.coroutines.launch
 @AndroidEntryPoint
 class RecipesFragment : Fragment(), SearchView.OnQueryTextListener {
 
-    private var binding: FragmentRecipesBinding? = null
-
     private val viewModel: RecipesViewModel by activityViewModels()
 
     private val args by navArgs<RecipesFragmentArgs>()
 
     private var dataRequested = false
 
-    private var isRequestedFromSearchApi = false
-
     override fun onCreateView(
         inflater: LayoutInflater,
         container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View? {
-        binding = FragmentRecipesBinding.inflate(inflater)
-        return binding?.root
+        savedInstanceState: Bundle?,
+    ): View {
+        return ComposeView(requireContext()).apply {
+            setContent {
+                TastyTheme {
+                    RecipesScreen(
+                        viewModel = viewModel,
+                        onRecipeClick = { recipe ->
+                            SelectedRecipeController.selectedRecipeEntity = recipe
+                            findNavController().navigate(
+                                RecipesFragmentDirections.actionRecipesFragmentToDetailsFragment(),
+                            )
+                        },
+                        onFabClick = {
+                            if (viewModel.isNetworkConnected.value == NetworkState.CONNECTED) {
+                                findNavController().navigate(R.id.action_recipesFragment_to_recipesBottomSheet)
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    getString(R.string.no_internet_connection),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                        },
+                    )
+                }
+            }
+        }
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
@@ -58,70 +74,69 @@ class RecipesFragment : Fragment(), SearchView.OnQueryTextListener {
 
         checkIsBackOnline()
 
-        isNetworkConnected()
+        monitorNetworkStatus()
 
         val menu: MenuHost = requireActivity()
-        menu.addMenuProvider(object : MenuProvider {
-            override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
-                menuInflater.inflate(R.menu.recipes_menu, menu)
+        menu.addMenuProvider(
+            object : MenuProvider {
+                override fun onCreateMenu(menu: Menu, menuInflater: MenuInflater) {
+                    menuInflater.inflate(R.menu.recipes_menu, menu)
 
-                val search = menu.findItem(R.id.menu_search)
-                val searchView = search.actionView as? SearchView
-                searchView?.isSubmitButtonEnabled = true
-                searchView?.setOnQueryTextListener(this@RecipesFragment)
-            }
-
-            override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
-                return true
-            }
-        }, viewLifecycleOwner, Lifecycle.State.RESUMED)
-    }
-
-    private fun isNetworkConnected() {
-        viewModel.isNetworkConnected.observe(viewLifecycleOwner) { networkStatus ->
-
-            readDatabase()
-
-            when (networkStatus) {
-                NetworkState.UNKNOWN -> return@observe
-
-                NetworkState.CONNECTED -> {
-                    binding?.choiceActionButton?.setOnClickListener {
-                        findNavController().navigate(R.id.action_recipesFragment_to_recipesBottomSheet)
-                    }
-
-                    if (viewModel.backOnline) {
-                        readDatabase()
-                        hideNoInternetError()
-                        Toast.makeText(
-                            context,
-                            getString(R.string.we_are_back_online),
-                            Toast.LENGTH_SHORT
-                        ).show()
-                        viewModel.saveBackOnline(false)
-                    }
+                    val search = menu.findItem(R.id.menu_search)
+                    val searchView = search.actionView as? SearchView
+                    searchView?.isSubmitButtonEnabled = true
+                    searchView?.setOnQueryTextListener(this@RecipesFragment)
                 }
 
-                NetworkState.DISCONNECTED -> {
-                    loadDataFromCache()
-                    Toast.makeText(
-                        context,
-                        getString(R.string.no_internet_connection),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                    viewModel.saveBackOnline(true)
+                override fun onMenuItemSelected(menuItem: MenuItem): Boolean {
+                    return true
+                }
+            },
+            viewLifecycleOwner, Lifecycle.State.RESUMED,
+        )
 
-                    binding?.choiceActionButton?.setOnClickListener {
+        loadInitialData()
+    }
+
+    private fun loadInitialData() {
+        viewLifecycleOwner.lifecycleScope.launch {
+            viewLifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+                val database = viewModel.readRecipes.value
+                if (database.isEmpty() && !dataRequested && viewModel.isNetworkConnected.value == NetworkState.CONNECTED) {
+                    viewModel.getRecipes(viewModel.applyQueries())
+                    dataRequested = true
+                } else if (args.backFromBottomSheet) {
+                    viewModel.getRecipes(viewModel.applyQueries())
+                }
+            }
+        }
+    }
+
+    private fun monitorNetworkStatus() {
+        lifecycleScope.launch {
+            viewModel.isNetworkConnected.collectLatest { networkStatus ->
+                when (networkStatus) {
+                    NetworkState.CONNECTED -> {
+                        if (viewModel.backOnline) {
+                            Toast.makeText(
+                                context,
+                                getString(R.string.we_are_back_online),
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            viewModel.saveBackOnline(false)
+                        }
+                    }
+
+                    NetworkState.DISCONNECTED -> {
                         Toast.makeText(
                             context,
                             getString(R.string.no_internet_connection),
-                            Toast.LENGTH_SHORT
+                            Toast.LENGTH_SHORT,
                         ).show()
+                        viewModel.saveBackOnline(true)
                     }
-                }
 
-                else -> {
-                    //do nothing
+                    else -> {}
                 }
             }
         }
@@ -135,147 +150,9 @@ class RecipesFragment : Fragment(), SearchView.OnQueryTextListener {
         }
     }
 
-    private fun readDatabase() {
-        viewModel.readRecipes.observe(viewLifecycleOwner) { database ->
-            if ((database.isNotEmpty()
-                        && !args.backFromBottomSheet)
-                || (database.isNotEmpty() && dataRequested)
-            ) {
-                setList(database)
-                hideShimmerEffect()
-            } else {
-                if (!dataRequested && viewModel.isNetworkConnected.value == NetworkState.CONNECTED) {
-                    requestApiData()
-                    dataRequested = true
-                }
-            }
-        }
-    }
-
-    private fun requestApiData() {
-        viewModel.getRecipes(viewModel.applyQueries())
-        viewModel.recipesResponse.observe(viewLifecycleOwner) { response ->
-            when (response) {
-                is NetworkResult.Success -> {
-                    hideShimmerEffect()
-                    response.data?.recipes?.let { recipeResponse -> setList(recipeResponse.map { it.toRecipeEntity() }) }
-                    viewModel.saveMealAndDietType()
-                }
-
-                is NetworkResult.Error -> {
-                    hideShimmerEffect()
-                    loadDataFromCache()
-                    Toast.makeText(
-                        requireContext(),
-                        getMessageFromResponse(response.messageId, response.message),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-
-                is NetworkResult.Loading -> {
-                    showShimmerEffect()
-                }
-            }
-        }
-    }
-
-    private fun searchApiData(query: String) {
-        showShimmerEffect()
-        viewModel.searchRecipes(viewModel.applySearchQuery(query))
-        viewModel.searchedRecipesResponse.observe(viewLifecycleOwner) { response ->
-            when (response) {
-                is NetworkResult.Success -> {
-                    isRequestedFromSearchApi = true
-                    hideShimmerEffect()
-                    response.data?.recipes?.let { recipeResponse -> setList(recipeResponse.map { it.toRecipeEntity() }) }
-                }
-
-                is NetworkResult.Error -> {
-                    hideShimmerEffect()
-                    loadDataFromCache()
-                    Toast.makeText(
-                        requireContext(),
-                        getMessageFromResponse(response.messageId, response.message),
-                        Toast.LENGTH_SHORT
-                    ).show()
-                }
-
-                is NetworkResult.Loading -> {
-                    showShimmerEffect()
-                }
-            }
-        }
-    }
-
-    private fun getMessageFromResponse(messageId: Int?, message: String?): String =
-        when {
-            messageId != null -> getString(messageId)
-            message != null -> message
-            else -> getString(R.string.empty_string)
-        }
-
-
-    private fun loadDataFromCache() {
-        viewModel.readRecipes.observe(viewLifecycleOwner) { database ->
-            if (database.isNotEmpty()) {
-                hideNoInternetError()
-                setList(database)
-            } else if (viewModel.isNetworkConnected.value == NetworkState.DISCONNECTED) {
-                setNoInternetError()
-            }
-        }
-    }
-
-    private fun setNoInternetError() {
-        binding?.run {
-            hideShimmerEffect()
-            errorImageView.visibility = View.VISIBLE
-            errorTextView.visibility = View.VISIBLE
-        }
-    }
-
-    private fun hideNoInternetError() {
-        binding?.run {
-            errorImageView.visibility = View.INVISIBLE
-            errorTextView.visibility = View.INVISIBLE
-        }
-    }
-
-    private fun setList(list: List<RecipeEntity>) {
-        binding?.recyclerView?.run {
-            if (adapter == null) {
-                if (isRequestedFromSearchApi) {
-                    layoutManager = LinearLayoutManager(requireContext())
-                    isRequestedFromSearchApi = false
-                }
-                adapter = RecipesAdapter { recipe ->
-
-                    SelectedRecipeController.selectedRecipeEntity = recipe
-
-                    findNavController().navigate(
-                        RecipesFragmentDirections.actionRecipesFragmentToDetailsFragment()
-                    )
-                }
-            }
-            (adapter as? RecipesAdapter)?.submitList(list)
-        }
-    }
-
-    private fun showShimmerEffect() {
-        binding?.shimmerFrameLayout?.startShimmer()
-        binding?.shimmerFrameLayout?.visibility = View.VISIBLE
-        binding?.recyclerView?.visibility = View.GONE
-    }
-
-    private fun hideShimmerEffect() {
-        binding?.shimmerFrameLayout?.stopShimmer()
-        binding?.shimmerFrameLayout?.visibility = View.GONE
-        binding?.recyclerView?.visibility = View.VISIBLE
-    }
-
     override fun onQueryTextSubmit(query: String?): Boolean {
         if (!query.isNullOrEmpty()) {
-            searchApiData(query)
+            viewModel.searchRecipes(viewModel.applySearchQuery(query))
         }
         return true
     }
