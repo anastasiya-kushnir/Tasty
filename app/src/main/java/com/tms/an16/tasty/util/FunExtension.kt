@@ -19,6 +19,10 @@ fun parseHtml(textView: TextView, description: String?) {
     }
 }
 
+fun parseHtml(html: String): String {
+    return Jsoup.parse(html).text()
+}
+
 fun applyVeganColor(view: View, vegan: Boolean) {
     if (vegan) {
         when (view) {
