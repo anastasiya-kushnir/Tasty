@@ -1,6 +1,5 @@
 package com.tms.an16.tasty.ui.trivia
 
-import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.tms.an16.tasty.R
@@ -14,6 +13,9 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import retrofit2.Response
 import javax.inject.Inject
@@ -24,11 +26,12 @@ class TriviaViewModel @Inject constructor(
     networkController: NetworkController
 ) : ViewModel() {
 
-    var triviaResponse: MutableLiveData<NetworkResult<Trivia>> = MutableLiveData()
+    private val _triviaResponse = MutableStateFlow<NetworkResult<Trivia>>(NetworkResult.Loading())
+    val triviaResponse: StateFlow<NetworkResult<Trivia>> = _triviaResponse.asStateFlow()
 
     val readTrivia: Flow<List<TriviaEntity>> = repository.local.readTrivia()
 
-    private val isNetworkConnected = MutableLiveData<NetworkState>()
+    private val isNetworkConnected = MutableStateFlow(NetworkState.DISCONNECTED)
 
     init {
         viewModelScope.launch {
@@ -40,21 +43,21 @@ class TriviaViewModel @Inject constructor(
 
     fun getTrivia() {
         viewModelScope.launch {
-            triviaResponse.value = NetworkResult.Loading()
+            _triviaResponse.value = NetworkResult.Loading()
             if (isNetworkConnected.value == NetworkState.CONNECTED) {
                 try {
                     val response = repository.remote.getTrivia()
-                    triviaResponse.value = handleTriviaResponse(response)
+                    _triviaResponse.value = handleTriviaResponse(response)
 
-                    val trivia = triviaResponse.value?.data
+                    val trivia = _triviaResponse.value.data
                     if (trivia != null) {
                         offlineCacheTrivia(trivia)
                     }
                 } catch (e: Exception) {
-                    triviaResponse.value = NetworkResult.Error(messageId = R.string.data_not_found)
+                    _triviaResponse.value = NetworkResult.Error(messageId = R.string.data_not_found)
                 }
             } else {
-                triviaResponse.value =
+                _triviaResponse.value =
                     NetworkResult.Error(messageId = R.string.no_internet_connection)
             }
         }
